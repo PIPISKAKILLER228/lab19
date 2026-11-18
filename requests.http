@@ -1,0 +1,62 @@
+@baseUrl = http://localhost:3100
+
+### Проверка сервера
+GET {{baseUrl}}/health
+
+### Регистрация нового пользователя
+# @name register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "student@example.com",
+  "name": "Студент",
+  "password": "Student123!"
+}
+
+### Логин пользователя (Passport LocalStrategy + выдача JWT)
+# @name loginUser
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "student@example.com",
+  "password": "Student123!"
+}
+
+### Профиль по JWT
+GET {{baseUrl}}/auth/profile
+Authorization: Bearer {{loginUser.response.body.access_token}}
+
+### Создание задачи (JWT обязателен)
+# @name createTask
+POST {{baseUrl}}/tasks
+Authorization: Bearer {{loginUser.response.body.access_token}}
+Content-Type: application/json
+
+{
+  "title": "Задача из requests.http",
+  "description": "Проверка JWT-защиты"
+}
+
+### Список своих задач
+GET {{baseUrl}}/tasks
+Authorization: Bearer {{loginUser.response.body.access_token}}
+
+### Попытка удалить задачу обычным пользователем -> 403
+DELETE {{baseUrl}}/tasks/{{createTask.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.access_token}}
+
+### Логин администратора
+# @name loginAdmin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@example.com",
+  "password": "Admin123!"
+}
+
+### Удаление задачи администратором -> 200
+DELETE {{baseUrl}}/tasks/{{createTask.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.access_token}}

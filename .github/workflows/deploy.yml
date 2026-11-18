@@ -1,0 +1,125 @@
+# ---------------------------------------------------------------------------
+# ЛР №19. CI/CD-пайплайн: тесты -> сборка образа -> push в Docker Hub ->
+# деплой в облако (Render через deploy hook; вариант для Railway — ниже).
+#
+# Секреты репозитория (Settings -> Secrets and variables -> Actions):
+#   DOCKERHUB_USERNAME     — логин Docker Hub
+#   DOCKERHUB_TOKEN        — access token Docker Hub (не пароль!)
+#   RENDER_DEPLOY_HOOK_URL — deploy hook URL сервиса Render
+# ---------------------------------------------------------------------------
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/lab19-nest-app
+
+jobs:
+  # ------------------------- 1. CI: тесты и сборка -------------------------
+  test:
+    name: Tests & build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Получение исходного кода
+        uses: actions/checkout@v4
+
+      - name: Настройка Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Установка зависимостей
+        run: npm ci
+
+      # ЛР №19, задание 3: тесты идут ДО сборки и деплоя.
+      # Ненулевой код возврата автоматически валит job,
+      # а jobs docker/deploy (needs: test) не запускаются вовсе.
+      - name: Юнит-тесты
+        run: npm test -- --ci
+
+      - name: E2E-тесты
+        run: npm run test:e2e -- --ci
+
+      - name: Сборка приложения
+        run: npm run build
+
+  # --------------------- 2. Сборка образа и push в реестр ------------------
+  docker:
+    name: Build & push image
+    needs: test
+    runs-on: ubuntu-latest
+    # на pull_request образ не пушим — только проверяем, что он собирается
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Получение исходного кода
+        uses: actions/checkout@v4
+
+      - name: Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Логин в Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Сборка и отправка образа
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ------------------------- 3. Деплой в облако ----------------------------
+  deploy:
+    name: Deploy to Render
+    needs: docker
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Триггер деплоя Render
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          curl --fail --silent --show-error \
+            -X POST "$RENDER_DEPLOY_HOOK_URL"
+
+# ---------------------------------------------------------------------------
+# Вариант для Railway (если выберете его вместо Render):
+#   1) удалите job deploy выше;
+#   2) добавьте секрет RAILWAY_TOKEN (Project Settings -> Tokens);
+#   3) раскомментируйте job ниже — Railway заберёт образ из Docker Hub
+#      и перезапустит сервис (сервис в панели Railway создаётся
+#      из образа $DOCKERHUB_USERNAME/lab19-nest-app:latest).
+#
+#  deploy:
+#    name: Deploy to Railway
+#    needs: docker
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Railway CLI
+#        run: npm i -g @railway/cli
+#      - name: Redeploy service
+#        env:
+#          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+#        run: railway redeploy --service lab19-nest-app --yes
+# ---------------------------------------------------------------------------
